@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+tdnf update -y
+tdnf install -y ca-certificates
+tdnf install -y openssl-c_rehash
+TRUSTED_CERT="-----BEGIN CERTIFICATE-----
+MIIC9TCCAd2gAwIBAgIRAItP6+6pJXNuPG5WWkTk7iUwDQYJKoZIhvcNAQELBQAw
+FDESMBAGA1UEAxMJaGFyYm9yLWNhMB4XDTIwMTExMTEyNTQ0MloXDTIxMTExMTEy
+NTQ0MlowFDESMBAGA1UEAxMJaGFyYm9yLWNhMIIBIjANBgkqhkiG9w0BAQEFAAOC
+AQ8AMIIBCgKCAQEA1R4yfLcZYtHfLZvMPu3yLEVuVIuiJsz+XiPWPKApxzqh8g0B
+KPumfW5gt7vN6E1zem9PjZw18tUAV8mGdkhng5TeBwg6n0lJMb9H6WYHQVwdJM+x
+tViBMxxF6CisxQlin/ImxbIspLelBWoVOeCT2vhX/mpItgmzMEgxj/PcATyYkeAO
+T/0E90YJ+x3niR5C1iR2VbB4sxhI7qAvbeFYP3DGxdosh4AUw8xhQVl2wavwmTn/
+n6O2ydIeojRUWbFln2Td/zLRrHE7zTBwXZOluDwa27i+MgskLOJbz3SCsuf+9lNd
+f9OqLFkQa/vfY5BG5bZtPCGeRLM+5u0qGE5N9wIDAQABo0IwQDAOBgNVHQ8BAf8E
+BAMCAqQwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMA8GA1UdEwEB/wQF
+MAMBAf8wDQYJKoZIhvcNAQELBQADggEBACL+zv/c80AD1o2l5YVBjuOGJVpLSDSq
+xA+JPryE+bubKewl28G8vWZcUfOFoHA8cQ1AXqTcFfVNcRiBWXnSMBddMF6w7pMX
+FBuj0rBoiw38k3ngPT/PuH01y/CcWWYTZ14RnRIS3QdGQ+VpL4FtDalEIoCZk+PM
+2br34GC2nTSMid7lR9BTJhfa4tLJVO5Kfodwm9uk3Yf59o8mT3ScCzuZwpDMu4ZV
+bViGRhkHa4G+p1YLRYKLE0MCujqbjx2cyRW6EMB/yVISE6mxQlShu3QWkMKnlvKX
+kr/6lhHubo9visCSDIag9PcwT885gDRK2nEuBZJVLpJaih2oy0RrFKk=
+-----END CERTIFICATE-----
+"
+echo "$TRUSTED_CERT" > /etc/ssl/certs/my-trusted-cert-2.pem
+/usr/bin/rehash_ca_certificates.sh
+echo "Finished, restarting containerd"
+systemctl restart containerd
+echo "done"
