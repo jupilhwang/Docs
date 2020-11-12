@@ -1,0 +1,729 @@
+CHAPTER 18
+Microservices Security
+
+In the e-commerce microservice application in Chapter 17, you should have noticed that there are few API methods, especially those in the product category and product services which are freely accessible by anyone; however, for accessing all other microservices you need to be logged in either as the back office admin or as a customer who has already created a user profile in the application. So far, so good, but how secure are those microservices even though you need to be logged in?
+Quite different from the traditional monolith architecture where all the services are centrally located, in a microservices architecture there are many nodes or processes where the services are distributed. Even if you consider the API gateway as a single, central, front controller where all your requests are initially intercepted, the API gateway has to then route the requests to the respective microservices, all through the internal network. Similarly, intermicroservice communication also happens through the same internal network. Even if you have secured the gateway access, your data is not free from insider attacks. One way to achieve security is to share the user credential data for all services and authenticate the user on each service before access. Even though this is actually a working approach, it would be a weird idea to distribute the credentials in multiple places. You should have a better approach.
+You will look at the concern of microservices security in this chapter. You will also build security features for the example from Chapter 17 so that you learn how this functions in a real-world situation. 
+
+You will be exploring the following in this chapter:
+• OAuth 2.0
+• Client types in the context of OAuth 2.0
+• Authorization code grand type in OAuth 2.0
+• JSON Web Token (JWT)
+• Enabling security for the microservices e-commerce application
+
+OAuth 2.0 and Microservices
+With Spring Security and its support for OAuth 2.0, you have everything you need to lock down your API gateway as well as your back-end resource servers. You can set it up to automatically propagate your access tokens from one microservice to the other, ensuring that everything stays secure and encrypted along the way. I won’t cover OAuth 2.0 in detail, but I will introduce the minimum aspects required so that you can enable security for your example microservices application.
+
+OAuth 2.0
+Internet Engineering Task Force (IETF) Request for Comments (RFC) No. 6749 defines the OAuth 2.0 as an authorization framework that enables a third-party application to obtain limited access to a HTTP service, either on behalf of a resource owner by orchestrating an approval interaction between the resource owner and the HTTP service, or by allowing the third-party  application to obtain access on its own behalf. The OAuth2.0 specification replaces and obsoletes the OAuth 1.0 protocol.
+
+OAuth 2.0 Roles
+OAuth defines four roles, which are central to the OAuth interactions:
+
+• Resource owner: Any entity capable of granting access to a protected resource. When the resource owner is a human, it is referred to as an end user. A resource owner can grant access, and this grant may be used for subsequent and repeated access of the resource.
+• Resource server: The server hosting the protected resources, capable of accepting and responding to protected resource requests using access tokens. In your microservices scenario, each microservice may become a resource server, if they own protected resources.
+• Client: This is an application making protected resource requests on behalf of the resource owner and with its authorization. The client, when it makes a request, may do so on behalf of an end user, who may or may not be the resource owner. The term “client” does not imply any particular implementation characteristics (e.g. whether the application executes on a server, a desktop, or other device).
+• Authorization server: The server issuing access tokens to the client after successfully authenticating the resource owner and obtaining authorization. The authorization server may be the same server as the resource server or a separate entity. A single authorization server may issue access tokens accepted by multiple resource servers.
+
+OAuth 2.0 Client vs. User Agent
+Even though OAuth specifies only four roles, you should also note another entity, which is typical in many cases like when you use a browser-based application:
+
+• User agent: The user agent is typically the interface with which the end user or the resource owner interfaces with the client program. Sometimes the user agent and the client can be the same.
+
+To understand the last statement, you need to explore a few typical architectures and understand the difference in the level of exposure of the respective client programs to the external world, and you will do so in the next section.
+
+Trusted vs. Untrusted Clients
+An OAuth client can be classified under two categories, trusted client or untrusted client. Whether a client falls into the trusted or the untrusted category depends based on whether the client has the ability to securely store and transmit information. The concept can be made clear by revisiting the selected architectural models described below.
+
+Classic Three-Tier Monolith
+A three-tier monolith architecture has a presentation tier, a middle tier, and a database tier. A classic three-tier architecture is a multipage architecture (MPA), which means that every time the user interface needs to display the data or submit data back to server, it has to request a new page from the server and then render it in the web browser. Java Server Pages (JSP) technology is used in creating MPA web apps; however, there are many other technologies that can be used to build MPA. Figure 18-1 depicts a three-tier monolith MPA.
+
+Figure 18-1. Classic three-tier monolith
+
+Typical interactions of a three-tier monolith MPA are as follows:
+
+1. The end user types the URL in the browser.
+2. The presentation tier component, usually a JSP page, generates the required HTML tags and sends them back to the browser where the HTML content gets rendered.
+3. User clicks and actions from the browser get intercepted by the presentation server where the next page needs to be generated.
+4. At this stage, if the page requires data from any protected resources, it needs to contact the security server or the authorization server where user authentication and authorization happens.
+5. Once authenticated and authorized, the presentation server will contact the business tier to retrieve any back-end data, embed it to the generated HTML content, and push the content back to the browser where the content gets rendered again.
+
+The notable point here is that at the end of Step 3, user authentication and authorization must be orchestrated and the end result of that is sent to the presentation server where it can cache or store the status of the authentication and authorization steps associated with the user (session). From then onwards, for every subsequent click and action of the end user from the browser, if it requires protected resources, the presentation server can retrieve the status of the authentication and authorization steps associated with the user (session) for that request and make decisions or route the request to other back-end servers. The status of the authentication and authorization steps cached or stored in the presentation server is safe since it is stored within the Demilitarized Zone (DMZ).
+
+Classical Three-Tier Monolith with HTTP Front
+In a slightly variant architecture, you will place only a HTTP server in the DMZ and all of the other components shown in the DMZ in Figure 18-1 will be moved to within the internal perimeter. Here, the status of the authentication and authorization steps cached or stored in the presentation server is even safer. Figure 18-2 depicts this deployment setup.
+
+Figure 18-2. Classic three-tier monolith with HTTP front
+
+In this architecture, all static content including HTML templates can be served by the HTTP server whereas all dynamic web content and protected resources in the business tier are accessed in a manner similar to that explained below (and shown in Figure 18-2): 
+
+1. The end user types the URL in the browser.
+2. The presentation tier component, usually a JSP page, will generate the required HTML tags and send them back to the browser where the HTML content gets rendered. All static content including HTML templates can be served by the HTTP server.
+3. User clicks and actions from the browser again get intercepted by the presentation server where the next page needs to be generated.
+4. At this stage, if the page requires data from any protected resources, it first needs to contact the security server or the authorization server where user authentication and authorization happen.
+5. Once authenticated and authorized, the presentation server contacts the business tier to retrieve any back-end data, embed it to the generated HTML content, and push the content back to the browser where the content gets rendered again.
+
+Microservices with an API Gateway
+Figure 18-3 depicts the API gateway-based microservices architecture. You saw many variants of this in previous chapters; however, it’s shown here to emphasize the security flow.
+
+Figure 18-3. Microservices API architecture
+
+It is typical for microservices architectures to use single page architecture (SPA), which is essentially an evolution of the MPA + AJAX design pattern. In SPA, only the shell page is generated on the server and the rest of the UI is rendered by browser JavaScript code. SPA requests the markup and data separately, and renders pages directly in the browser. The overall flow is summarized as follows:
+
+1. The end user types the URL in the browser.
+2. The presentation tier component, usually a SPA web app, is downloaded into the browser and the first page or the default page is rendered. SPA resources (HTML+CSS+scripts) are loaded
+only once throughout the lifespan of the application. Further, only data is transmitted back and forth.
+3. Further user clicks and actions from the browser get intercepted by the API gateway.
+4. At this stage, if the request requires data from any protected resources, the API gateway will first need to contact the security server or the authorization server, where user authentication and authorization happen.
+5. Once authenticated and authorized, the API gateway contacts the microservice to retrieve any back-end data and pushes the data alone as a response back to the browser where the content gets rendered again.
+
+Here again, at the end of Step 3 at the API gateway, user authentication and authorization must be orchestrated and the end result of that is sent to the API gateway where it can cache or store the status of the authentication and authorization steps associated with the user. From then onwards, for every subsequent click and action of the end user from the browser, when the request hits the API gateway, if it requires protected resources, the API gateway can retrieve the status of the authentication and authorization steps associated with the user for that request and make decisions or route requests to other back-end resource servers. The status of the authentication and authorization steps cached or stored in the API gateway is safe since it is stored within the DMZ with strict controls enforced by the enterprise in terms of security and access control.
+
+Client App with No Server
+Another variant possible is a case where the complete web app (or the SPA), once downloaded, will then continue executing completely from within the browser, in which case there is no presentation tier, or business tier for that matter. In short, there is no server-side counterpart of the web app in the browser. There can be a scenario where the web app will still need to access some protected resource; however, this time it’s from a third party, as shown in Figure 18-4.
+
+Figure 18-4. Web app without a server
+
+There are more variants of deployment options available, but let’s stick to the scenarios explained earlier.
+
+The Authorization Code Grand Types
+There are several grand types defined by OAuth; however, I will limit this discussion to the authorization code grant type, since it is suitable for OAuth clients that can keep their client credentials confidential when authenticating with the authorization server. For the microservices scenarios, the API gateway is the “client” implemented on a secure server.
+As a redirection-based flow, this OAuth client must be able to interact with the user agent of the resource owner and also must be able to receive incoming requests through redirection from the authorization server.
+
+Let’s look at an authorization code grant type sequence of flows, with the example you are going to visit in the next section in mind. See Figure 18-5.
+
+Figure 18-5. OAuth authorization code grant type
+
+Referring to Figure 18-5, the typical sequence of interactions for an end-to-end authorization flow in accessing a protected resource can be summarized as follows:
+
+1. The end user types the URL in the browser.
+2. The presentation tier component, usually a SPA web app, is downloaded into the browser and the first page or the default page is rendered. SPA resources (HTML+CSS+scripts) are loaded only once throughout the lifespan of the application. Further, only data is transmitted back and forth.
+3. Further user clicks and actions from the browser get intercepted by the API gateway. The API gateway is the OAuth client. Since the API gateway is a secure server-side microservice, it can keep its client credentials confidential when authenticating with the authorization server.
+4. At this stage, if the request requires data from any protected resources, the API gateway initiates the flow by directing the user agent of the resource owner to the authorization endpoint. While doing that, the OAuth client includes its client identifier, requested scope, local state, and a redirection URI. Once the access to the protected resource is allowed or denied, the authorization server sends the user agent back to the redirection URI indicated by the client.
+5. The authorization server usually requires the user to authenticate as a first step. This step is required to assert if the one who is claiming to be the resource owner is in fact the actual resource owner and what rights they’re allowed to delegate to the client. The authorization server can be the same server as the resource server or a separate entity.
+6. The authorization server authenticates the resource owner through the user agent. The user’s authentication passes directly between the user (through the user agent) and the  authorization server, so it’s never seen by the client.
+7. Authentication may be done by looking at an internal authentication server. OAuth doesn’t dictate any specific authentication technology, and the authorization server is free to choose methods such as a username/password pair, cryptographic certificates, security tokens, single-sign-on, or any of the other possibilities.
+8. Once the resource owner grants access, the OAuth client uses the redirection URI provided in Step 4 to redirect the user agent back to the OAuth client. The redirection URI also includes an authorization code and any local state previously provided by the OAuth client.
+9. Now that the client has the authorization code, it can send it back to the authorization server on its token endpoint. The OAuth client also includes the redirection URI used to obtain the authorization code for verification.
+10. The authorization server validates the client credentials and the authorization code. The server also ensures that the redirection URI received matches the URI used to redirect the client in Step 3. If the authorization code is valid, has not been used previously, and the client making this request is the same as the client that made the original request, the authorization server generates and returns a new access token for the client. A single authorization server may issue access tokens accepted by multiple resource servers.
+11. With the token in hand, the client can present the token to the resource server (protected resource).
+12. The resource server can check with the token validation end point of the authorization server.
+13. If the token presented in the previous step is valid, the resource server can return the protected resources to the client.
+14. The client can return this protected resource back to the SPA web app as a response to the user click in Step 3.
+
+Tokens for Scalable API Invocations
+Having looked at the dynamics of a typical authorization grand type OAuth flow, you should now look at some aspects of this security schema with respect to microservices architecture, especially in terms of scalability and security of the token themselves.
+
+Session IDs
+Traditionally, authentication has been done as a stateful operation. When the user inputs his or her credentials, the server generates a unique session ID, stores it on the server side, and hands it back to the user as well. Along with each request that needs access to protected resources, this session ID is passed as a request header and the server will always validate the session ID against the actual user credentials on the server side or with the “sessions on play” cache maintained on the server side. This is near to a perfect solution for monolith applications, where for each request response cycle you need no more than one such validation.
+For microservices architectures, this can be limiting. Getting data from the central store for every other operation can be troublesome, especially when a single user-side request-response cycle internally spans across a graph or many intermicroservice calls. Even when a single user-side request-response cycle internally gets served by a single microservice, the cumulative process of user authentication and authorization DB (or cache) lookup and validations for all the API methods for a high transactional system is cumbersome, so we need smarter design mechanisms. 
+You should notice one good thing about session IDs: session IDs are opaque, meaning no easily decipherable data can be extracted from session IDs by third parties. The linkage between the session ID and its inferable data is entirely done server-side.
+
+Tokens
+Tokens are an alternative to making session ID-based security design smarter. A token is more than an identifier, with meaningful and inferable data too in it. A token, in addition to the session ID, can also contain less sensitive portions of user credentials, like the user name. In this manner, the user or the service requester detail is already available in the request header, so microservices don’t need to do another I/O (input/output) to the database or cache to interpret the requestor. Now you need to look at the authorization part: who has access to what protected resources, and once accessed, what actions can that user execute over the resource. So you could also include information about the types of operations available for the user into the token. You could, for example, add a field named scope, which can have values like user to represent the authority of a normal end user and admin, who will have extra authority to perform critical back-office operations. If so, when a user supplies the token along with the request to perform an operation, say by making a call to an API endpoint, the service handling that endpoint and safeguarding the protected resource can validate the token, look for the right “scopes” in it, and authorize (or deny) the user to perform that operation.
+
+JSON Web Token (JWT)
+You may create your own token for the convenience described in the previous section or you can adopt a standard that already exists in the industry called JSON Web Token (JWT).
+JWT has three distinct parts that are URL encoded for transport:
+• Header: The header contains the metadata for the token and at a minimum it contains the type of the signature and/or encryption algorithm.
+• Claims: The claims contain any information that you want signed.
+• JSON Web Signature (JWS): The headers and claims are digitally signed using the algorithm specified in the header.
+
+A JWT encodes a series of claims in a JSON object. Some of these claims have specific meanings, while others are left to be interpreted by the users. Some of the claims you commonly encounter are
+• Issuer (iss)
+• Subject (sub)
+• Audience (aud)
+• Expiration time (exp)
+• Not before (nbf )
+• Issued at (iat)
+• JWT ID (jti)
+
+Using a common data format like JWT allows for easy interoperability with established solutions and libraries so that you have tried and tested patterns for common, recurring problems.
+A typical JWT payload is as follows:
+{
+"sub": "1234567890",
+"name": "John Doe",
+"iat": 1516239022
+}
+
+Such a token provided by server will be sent along with the request by each client application, many times the browser or user agent being this client. This data then is vulnerable for man-in-the-middle kinds of attacks. To make it clear, someone intercepting this token can attempt to replay the request using the same token. There should be a way to prevent this.
+Let’s look into the three claims listed above.
+
+• Expiration time (exp): UNIX timestamp of when the token will be considered expired, required if iat is not present
+• Issued at (iat): UNIX timestamp of when the token was created, required if exp is not present
+• JWT ID (jti): A unique token string, effectively a nonce, must be unique to each request, cannot be an empty string
+
+This timestamp information helps to limit the validity of tokens to prevent replay attacks. In one schema, the server can choose not to accept messages that have been sent more than x minutes before the current time. This raises the issue of clock skew between the client and server machines, so you will probably want to build some tolerance into the server to make up for this discrepancy by padding the time frame by n minutes on either side to make up for potential differences in clocks on different machines, assuming you have already taken care synchronizing the clocks of different servers.
+The above nonce (as a jti value) helps to prevent replay attacks. A nonce is just an arbitrary set of bytes that you create to help prevent replay attacks. Every request must have a unique payload. The jti value cannot be reused even if the request failed (400-599 HTTP status codes) or was incorrectly sent over HTTP instead of HTTPS. For each request, it is recommended to generate a Global Unique Identifier (GUID) or a sufficiently random string to ensure no two requests have the same jti value within the “x minute” span.
+Since JWT is sent along with the request by each client application, many times the browser or user agent being this client, this data then is vulnerable for malicious tampering too. It can be tampered with to add claims for privileges not intended to be available for a user. Hence the token itself should be tamper proof.
+When the API authentication scheme uses JWTs in the HTTP authorization header of requests made to it, every request will have the authorization header set with the bearer scheme. The following is an example:
+
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+
+Here, the header and claims are JSON that are base64 encoded for transport. The header, claims, and signature are appended together with a period character (.), thus providing JWT a structure like 
+
+[Base64Encoded(HEADER)] . [Base64Encoded (PAYLOAD)] . [encoded(SIGNATURE)]
+
+Assuming that all of the above has been taken care of, how do you verify that a valid token as complying with all of the above was originally sent from the right partner end point itself?  JWT can’t be trusted if it’s not signed. JWTs allow for different signing and encryption algorithms using the JSON Web Signature (JWS) specs. They are specified in the JWT header. For the most part, JWTs are usually not encrypted, just signed. However, if your token contains data that is sensitive, then encrypting it using JSON Web Encryption (JWE) is a choice. A typical encryption scheme uses an already signed JWT as the payload for encryption. This is known as a nested JWT. It is acceptable to use the same key for encryption and validation also.
+Enough is enough; you have scratched the surface of JWT. There are more intricacies and loop holes, but this is enough for you to understand the following example.
+
+Design Security for the Example Microservices Application
+You will now secure the microservices application from Chapter 17. The example from Chapter 17 had very basic authentication implemented. This is the reason why you are able to browse through the initial pages starting from the home page of the example application up to the point where you can add items to your shopping cart; however, for the next step of checking out to be permitted, you should have either already been signed in, you should sign in if you already have a profile in the application, or if you do not have a ready profile in the application, you should create one then and sign in. Similarly, for the back-office admin to carry out this functionality in the application, he should also be logged in.
+However, this logging-in is only one part of the securing process. For a real microservices application to be properly secured, you should also take care of the authorization part. Without proper authorization, even if your web app functionality is limited with the help of authentication, the individual microservices APIs themselves are not secure. So if someone from within the same network of the individual microservice is able to access the individual microservice, they can execute functionality. Of course this can be permitted, but only after the required authorization. This is what you are going to enable in your example application.
+
+Security Architecture for Microservices
+Refer to Figure 17-11 in Chapter 17 for the basic architecture for the example microservices application. Let’s enhance it with the extra pieces required to secure the example application end to end. See Figure 18-6.
+
+Figure 18-6. Security architecture for the microservices e-commerce application Observe the differences between the architectures shown in Figure 17-11 and Figure 18-6. The latter shows a new Security microservice. This Security microservice is an OAuth authorization server. There is more than one resource server, since each of the application microservices has to secure its own data based on the authorization schema deployed.
+You should now refer back to Figure 18-5 where you saw the OAuth dance during the initial authorization code type flow. The same design will be followed in the enhanced security architecture for your example microservice application too. All the requests from the web application in the browser will be first intercepted by the API gateway.
+It’s the API gateway’s responsibility to take care of the microservice’s security. The API gateway will first check if the incoming REST request has an existing access token for the protected resource, Referring to Figure 18-6,
+
+• If an access token doesn’t exist, that means the request is a part of the initial cycles of the OAuth handshake described in “The Authorization Code Grand Types” subsection earlier. If so, the gateway will check if the request is targeted towards the authorization server and if so, will add the client_id and client_secret too. The OAuth client credentials (client_id and client_secret) are kept securely at the server side by the gateway, and the gateway adds them to the request headers and forwards the request. The OAuth handshake, as described earlier, will happen at the end of which an access token is provided as response header.
+• On the contrary, if an access token already exists, it will add the token to the request header and forward the request to the protected resource.
+
+Asymmetric Signing and Reference Tokens
+In the “JSON Web Tokens” subsection earlier, you learned about the need to sign JWTs. There are two methods of signing, using symmetric keys or asymmetric keys. While in the symmetric scenario you use the same key to encrypt and decrypt the digital signature, in the asymmetric case you use a private and public key combination.
+Another concern you face when using tokens is the length of token in complex authorization scenarios. It is quite possible that the size of the JWT can grow to an extent that it will meet technical hurdles to be passed as the header of the request. Moreover, even though you can sign and encrypt a JWT, it is still “sensitive information” and it is best not to make this information float outside your DMZ. Let’s consider the notion of a reference token here. A reference token is a reference to the actual JWT, and you will pass only the reference token beyond your DMZ (or OAuth client).
+In securing the example microservice application, you will leverage both the above. See Figure 18-7.
+
+Figure 18-7. Asymmetric encryption and reference tokens
+
+Referring back to the subsection titled “The Authorization Code Grand Types”, in Step 4 you assume the user request for a protected resource has already reached the API gateway. Now, referring to Figure 18-7,
+
+1. The user request for a protected resource reaches the API gateway.
+2. The authorization server, after doing all basic checks and validation for authentication and authorization, will first create a JWT. This JWT is signed and encrypted using asymmetric keys. Asymmetric keys have the notion of a private key, which is accessible only to the authorization server, and its counterpart key, called a public key, which the authorization server will freely distribute to anyone who has a need for it, to all resource servers in your case.
+3. The signed and encrypted JWT is returned back to the API gateway.
+4. Instead of the API gateway returning the JWT as such to the user or the browser, it will map the JWT against a new reference token, possibly in a local cache or local store.
+5. The API gateway returns only the reference token to the user or the browser.
+6. For any subsequent user action in the web app that requires access to any server-side protected resource, the reference token is also passed as the request header, which will again be intercepted by the API gateway.
+7. The API gateway retrieves the actual JWT corresponding to the reference token.
+8. The API gateway forwards the request after appending the JWT into the request to the resource server.
+
+As you can see from Figure 18-7, the resource server can now validate the authenticity of the JWT received using a copy of the public key it possess, and further validate if the request has the required authority and then accept or reject the request.
+
+Code Security into Microservices E-Commerce Application
+This section is a continuation of the code you saw in Chapter 17. You are advised to go through Chapter 17 before proceeding further with the example application in this  chapter. I will incrementally add and explain the critical code required to establish OAuth-based security for this example. The complete code required to demonstrate establishing OAuth security for the example E-Commerce microservices application is in folder ch18\ch18-01\Ax2-Ecom-With-Security.
+
+Enable the Web App to Handle Security
+As you have already experienced by running the application in Chapter 17, there are many screens in the web app that you can browse through without actually logging into the system. However, certain actions require the user to be logged in, as follows:
+
+• The web app will ask you to log in before you confirm your order when checking out. See Listing 18-1.
+
+Listing 18-1. Order Now in Web App (ch18\ch18-01\Ax2-Ecom-With-Security\Ecom-web\src\main\resources\static\cart.html)
+<!DOCTYPE html>
+<div ng-controller="CartController as cartCtrl" data-ng-init="init()">
+  <div class="row">
+    <div class="caption col-sm-12 text-right">
+      <a class="btn btn-warning" role="button" ng-click="doOrder()">
+        Order now
+      </a>
+    </div>
+  </div>
+</div>
+
+• If you explicitly click the “Hello, My Orders” link towards the middle upper portion of the screen, the web app will ask you to log in. See Listing 18-2.
+
+Listing 18-2. Your Orders on the Home Page (ch18\ch18-01\Ax2-Ecom-WithSecurity\Ecom-web\src\main\resources\static\index.html)
+<form class="navbar-form navbar-right" role="search">
+  <li>
+    <a href="" ng-click="doOrder()" >
+      <span style="color: maroon; ">
+        <b>Hello {{screenName}} ,your orders</b>
+      </span>
+    </a>
+  </li>
+</form>
+
+Both the above actions will be routed by the code in Listing 18-3.
+
+Listing 18-3. Routing the doOrder Action (ch18\ch18-01\Ax2-Ecom-WithSecurity\Ecom-web\src\main\resources\static\js\controller\application_controller.js)
+$scope.doOrder = function() {
+  if(sessionStorage.getItem('loggedUser')==null){
+    $location.url('/user');
+  }else{
+    $location.url('/order');
+  }
+};
+
+Listing 18-3 shows that if the user is not already logged in, he will be prompted to the login screen.
+Listing 18-4 shows other core parts of the code.
+
+Listing 18-4. Route Mappings (ch18\ch18-01\Ax2-Ecom-With-Security\Ecomweb\src\main\resources\static\js\app.js)
+ecomApp.config(['$routeProvider', function($routeProvider) {
+  $routeProvider.
+  when('/order', {
+    templateUrl: '/order.html',
+    //controller: 'ShowOrdersController'
+  }).
+  when('/user', {
+    templateUrl: '/user.html',
+    //controller: 'ShowOrdersController'
+  }).
+  when('/newUser', {
+    templateUrl: '/newUser.html',
+    //controller: 'ShowOrdersController'
+  }).
+  otherwise({
+    templateUrl: '/productSearch.html'
+  });
+}]).config(['$httpProvider', function($httpProvider) {
+  $httpProvider.defaults.withCredentials = true;
+  $httpProvider.interceptors.push('AuthInterceptor');
+}]);
+
+ecomApp.factory('AuthInterceptor', function ($window, $q) {
+  return {
+    request: function(config) {
+      config.headers = config.headers || {};
+        if (sessionStorage.getItem('xtoken')) {
+          config.headers['x-token'] = sessionStorage.getItem('xtoken');
+        }
+        return config || $q.when(config);
+      },
+      response: function(response) {
+        if (response.status === 401) {
+          alert(response.status);
+        }
+        return response || $q.when(response);
+      }
+    };
+});
+
+If you use the standard $http service to access remote APIs, it will just work as long as the server is configured to allow HTTP requests from your domain and you don’t need to store cookies. But for many applications, including yours, you also need to set and store cookie information, especially for logins. By default, this is not allowed in most browsers, and withCredentials is a flag you can set on a low-level XMLHttpRequest (AJAX) object.  In Angular JS you can configure the $http requests to set this flag for everything by doing 
+
+$httpProvider.defaults.withCredentials = true;
+
+As a next step, you inject an AuthInterceptor. The AuthInterceptor code is invoked every time a request is fired from the browser. It will retrieve the reference token stored in the session store and append it along with the request header.
+user.html will allow a user to log into the application. If the user is a new user, there is an option for him to click the “New user?” button and create a new user profile. Even if you create a new user profile, you will be led to the user login page subsequently. See Listing 18-5.
+
+Listing 18-5. User.html (ch18\ch18-01\Ax2-Ecom-With-Security\Ecom-web\src\main\resources\static\user.html)
+<form class="form-horizontal">
+  <div class="form-group">
+    <label><a href="#newUser"><strong>New user?</strong></a>
+  </div>
+  <div class="form-group">
+    <button type="submit" class="btn btn-default" ng-click="loginCtrl.doLogin()">Submit</button>
+  </div>
+</form>
+
+loginCtrl.doLogin() first invokes the UserService to validate the user trying to login. If successful, it will load the cart for that user and also redirect to /order so that the order widgets can be prepopulated and shown to the user. See Listing 18-6.
+
+Listing 18-6. user_controller.js (ch18\ch18-01\Ax2-Ecom-With-Security\Ecomweb\src\main\resources\static\js\controller\user_controller.js)
+ecomApp.controller('LoginController', ['$scope','$location','UserService','CartService', function($scope,$location,UserService,CartService) {
+  loginCtrl.doLogin =function(){
+    UserService.validateUser($scope.userCredentialDTO).then(
+      function(data) {
+        sessionStorage.setItem('loggedUser', JSON.stringify(data));
+        sessionStorage.setItem('sessionUser',data.userId);
+        $scope.screenName=data.firstName+ ' '+data.lastName;
+        $scope.$emit('userModified', $scope.screenName);
+        if($scope.myCart!=null){
+          $scope.myCart.userId=data.userId;
+        }
+        loginCtrl.loadCart();
+        $location.url('/order');
+      }
+    );
+  }
+}]);
+
+Listing 18-7 shows the UserService.validateUser implementation.
+
+Listing 18-7. Web App-Side User Authentication (ch18\ch18-01\Ax2-EcomWith-Security\Ecom-web\src\main\resources\static\js\service\user_service.js)
+'use strict';
+ecomApp.factory('UserService', ['$http','$httpParamSerializer', '$q','$cookies', function($http, $httpParamSerializer,$q,$cookies){
+  return {
+    validateUser: function(userCredentialDTO){
+      var data = {
+        grant_type:"password",
+        username: userCredentialDTO.userName,
+        password: userCredentialDTO.password,
+        client_id: "ecom_app"
+      };
+      var encodedData = $httpParamSerializer(data);
+      var authUrl=sessionStorage.getItem('apiUrl')+"/security/oauth/token"
+      var req = {
+        method: 'POST',
+        url: authUrl,
+        headers: {
+          "Content-type": "application/x-www-form-urlencoded; charset=utf-8"
+        },
+        data: encodedData
+      };
+      return $http(req)
+        .then(
+          function(response){
+            var token=(response.headers()['x-token']);
+            sessionStorage.setItem("xtoken", token);
+            return $http.get(sessionStorage.getItem('apiUrl')+'/customer/customer')
+                .then(
+                    function(response){
+                      return response.data;
+                    },
+                    function(errResponse){
+                      console.error('Error while getting user info'+errResponse);
+                      return $q.reject(errResponse);
+                    }
+                );
+            },
+          function(errResponse){
+            console.error('Error while validating user'+errResponse);
+            return $q.reject(errResponse);
+          }
+        );
+    }
+  };
+}]);
+
+The request call will pass through above function once during a user session, when the user wants to log in. You do two things here:
+1. First, you invoke the authentication flow, supplying the user credentials and the client_id as a request parameter.
+2. If the above authentication request is successful, you first retrieve the reference token from the response and cache it in the session storage so that the same can be supplied along with request parameters in cases where you need to access any server-side protected resource. As a next step, you invoke the customer end point to retrieve the full details of the logged-in user. 
+
+This completes the minimal information for you to understand the critical flows involved on the web app side to implement security.
+
+Zuul, the API Gateway as OAuth Client
+Security is handled using Zuul filters. You use both a pre-filter and a post-filter to Zuul. A Zuul pre-filter is invoked before Zuul delegates the request to the actual resource server. See Listing 18-8.
+
+Listing 18-8. Zuul Pre-Filter (ch18\ch18-01\Ax2-Ecom-With-Security\Ecom-gateway\src\main\java\com\acme\ecom\gateway\zuul\auth\filter\AuthenticationPreFilter.java)
+@Component
+public class AuthenticationPreFilter extends ZuulFilter {
+  @Override
+  public String filterType() {
+    return "pre";
+  }
+  
+  @Override
+  public int filterOrder() {
+    return 1;
+  }
+  
+  @Override
+  public boolean shouldFilter() {
+    return true;
+  }
+
+  @Autowired
+  private CacheManager cacheManager;
+
+  @Override
+  public Object run() {
+    RequestContext ctx = RequestContext.getCurrentContext();
+    HttpServletRequest request = ctx.getRequest();
+    request.getRequestURL().toString()));
+    if(request.getRequestURL().indexOf("/oauth/token") > 0 && request.getParameter("grant_type") != null && (
+      StringUtils.equals(request.getParameter("grant_type"), "password"))){
+      ctx.addZuulRequestHeader("authorization", "Basic " + new String(Base64.getEncoder().encode("ecom_app:ecom".getBytes())));
+      ctx.addZuulRequestHeader("content-type", "application/x-www-form-urlencoded; charset=utf-8");
+    }else{
+      final String xToken = request.getHeader("x-token");
+      if(StringUtils.isNotEmpty(xToken)){
+        ValueWrapper value = cacheManager.getCache("AUTH_CACHE").get(xToken);
+        if(value != null){
+          TokenDTO tokenDTO=(TokenDTO) value.get();
+          ctx.addZuulRequestHeader("Authorization", "Bearer " + tokenDTO.getAccess_token());
+        }
+      }
+    }
+    return null;
+  }
+}
+
+In the Zuul pre-filter there can be three major scenarios:
+
+• If the request is for authentication, the Zuul pre-filter will add a header to denote basic authentication. While it does so, it will also add client_id and client_secret along with the header. Note that client_secret is a parameter only the Zuul API gateway knows, since the Zuul API gateway is the OAuth client.
+• If the request is not for authentication, there can be two cases. The first case is when the user has not already logged in. In that case, the Zuul pre-filter will do nothing.
+• The second case when the request is not for authentication is when the user has already been authenticated. In that case, the Zuul pre-filter assumes that there is a reference token available in the request header and, using that token, it will do a look-up into its local EHCache for the actual JWT. For the time being, assume that whenever the API gateway receives a JWT for the first time for a user session, it first caches that into the EHCache against a reference token and it’s this reference token that is returned to the user. The JWT retrieved is then added to the request header to effect bearer authorization.
+
+A Zuul post-filter is invoked after the Zuul receives the response from the actual resource server. Listing 18-9 shows your Zuul post-filter.
+
+Listing 18-9. Zuul Post-Filter (ch18\ch18-01\Ax2-Ecom-With-Security\Ecom-gateway\src\main\java\com\acme\ecom\gateway\zuul\auth\filter\AuthenticationPostFilter.java)
+@Component
+public class AuthenticationPostFilter extends ZuulFilter {
+  public static final String MAGIC_KEY = "obfuscate";
+  @Autowired
+  private CacheManager cacheManager;
+
+  @Override
+  public String filterType() {
+    return "post";
+  }
+
+  @Override
+  public int filterOrder() {
+    return 1;
+  }
+
+  @Override
+  public boolean shouldFilter() {
+    RequestContext ctx = RequestContext.getCurrentContext();
+    HttpServletRequest request = ctx.getRequest();
+    return request.getParameter("grant_type") != null && (StringUtils.equals(request.getParameter("grant_type"), "password"));
+  }
+
+  @Override
+  public Object run() {
+    RequestContext ctx = RequestContext.getCurrentContext();
+    HttpServletRequest request = ctx.getRequest();
+    if (request.getRequestURL().indexOf("/oauth/token") > 0 ) {
+      HttpServletResponse response = ctx.getResponse();
+      if (response.getStatus() == HttpServletResponse.SC_OK) {
+        final String responseData = CharStreams.toString(new InputStreamReader(responseDataStream,"UTF-8"));
+        TokenDTO tokenDTO = new ObjectMapper().readValue(responseData, TokenDTO.class);
+        long expiryTime = System.currentTimeMillis() + ((Integer.valueOf(tokenDTO.getExpires_in()) - 1) ∗ 1000);
+        String refToken = expiryTime + ":" + createReferenceToken(request.getParameter("username"), expiryTime);
+        ctx.addZuulResponseHeader("Access-Control-Expose-Headers", "x-token");
+        ctx.addZuulResponseHeader("x-token", refToken);
+        cacheManager.getCache("AUTH_CACHE").put(refToken, tokenDTO);
+      }
+    }
+    return null;
+  }
+
+  private String createReferenceToken(String username, long expires){
+    StringBuilder signatureBuilder = new StringBuilder();
+    signatureBuilder.append(username);
+    signatureBuilder.append(":");
+    signatureBuilder.append(expires);
+    signatureBuilder.append(":");
+    signatureBuilder.append(MAGIC_KEY);
+    MessageDigest digest;
+    try {
+      digest = MessageDigest.getInstance("MD5");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("MD5 algorithm not available!");
+    }
+    return new String(Hex.encode(digest.digest(signatureBuilder.toString().getBytes())));
+  }
+}
+
+The Zuul post-filter will be invoked only during the authentication flow. The main job of Zuul post-filter is, whenever it receives a JWT for the first time for a user session from the authorization server, it first caches that into the EHCache against a reference token and this reference token is returned as a response header.
+
+Authorization Server
+The authorization server forms the core of the OAuth process, which will take care of both authentication and authorization. 
+For authentication, you use Spring Security’s web infrastructure, a collection of standard servlet filters. Here’s a quick look at Spring’s definition of terms:
+• Principal: A user, device, or a system that performs an action.
+• Authentication: The process of establishing if a principal’s credentials are valid
+• Authorization: Deciding whether the principal is allowed to perform an action
+• Secured item: The protected resource
+
+You must enable the security configuration class shown in Listing 18-10 to use the jdbc datasource you defined for authenticating and authorizing users.
+
+Listing 18-10. Spring Security Configuration (ch18\ch18-01\Ax2-Ecom-WithSecurity\Ecom-security\src\main\java\com\acme\ecom\security\oauth\WebSecurityConfig.java)
+@Configuration
+class WebSecurityConfig extends WebSecurityConfigurerAdapter {
+  @Autowired
+  private JdbcTemplate jdbcTemplate;
+
+  @Override
+  @Bean
+  public AuthenticationManager authenticationManagerBean() throws Exception {
+    return super.authenticationManagerBean();
+  }
+
+  @Override
+  protected void configure(HttpSecurity http) throws Exception {
+    http
+      .csrf().disable()
+      .exceptionHandling()
+      .authenticationEntryPoint((request, response, authException) -> response.sendError(HttpServletResponse.SC_UNAUTHORIZED))
+      .and()
+      .authorizeRequests()
+      .antMatchers("/∗∗").authenticated()
+      .and()
+      .httpBasic();
+  }
+
+  @Override
+  protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+    auth.jdbcAuthentication().dataSource(jdbcTemplate.getDataSource())
+        .usersByUsernameQuery("select user_id, password, active from user_credential where user_id=?")
+        .authoritiesByUsernameQuery("select user.user_id, role.role from user_credential user join user_role role on user.id = role.user_id and user.user_id =?");
+  }
+}
+
+The Java configuration method creates a servlet filter known as the springSecurityFilterChain (DelegatingFilterProxy and FilterChainProxy) which is responsible for all security (protecting the application URLs, validating username and passwords submitted, redirecting to the login form, etc.) within your application. 
+You declare the authenticationManagerBean as a bean, which will be injected in the Spring OAuth security configuration later.
+WebSecurityConfigurerAdapter provides a default configuration in the configure(HttpSecurity http) method, hence all users require to be authenticated for accessing any URLs of web application. But you can override this method as shown in Listing 18-10.
+First, configure HttpSecurity to define what resources must be secured, authorized, not authorized, not secured, login page, logout page, access denied page, etc. One important thing to note here is the order of configuration. Configuration that is specific to certain pages or URLs must be placed first, then configurations that are in common among most URLs.
+If the authentication fails, you get back the expected 401 Unauthorized and subsequently the authentication challenge. The browser in a normal web page context will interpret this challenge and prompt you for credentials with a simple dialog. From the browser environment, a login page is no longer a hard requirement since all browsers support basic authentication and can use a standard dialog to prompt the user for credentials. Also, the BasicAuthenticationEntryPoint provisioned by Spring Security by default returns a full page for a 401 Unauthorized response back to the client. This HTML representation of the error also renders well in a browser, but it’s not wellsuited for scenarios like yours, such as a REST API or a Zuul API gateway where a JSON representation may be preferred. So you should prevent the authentication dialog by retaining the HTTP Basic but changing the 401 challenge to something other than “Basic.” You can do that with a one-line implementation of AuthenticationEntryPoint in the HttpSecurity configuration callback:
+
+authenticationEntryPoint((request, response, authException) -> response.sendError(HttpServletResponse.SC_UNAUTHORIZED))
+
+Next is the configuration for authentication. For authentication, Spring Security provides various methods:
+
+• The DAO authentication provider is the Spring’s default 
+  Spring here expects an org.springframework.security.core. userdetails.UserDetailsService implementation to provide credentials and authorities.
+  • Built-in: In-memory (properties), JDBC (database), LDAP
+  • Custom
+• Custom authentication provider Example: To get preauthenticated user details when using single sign-on
+  • CAS, TAM, SiteMinder
+
+You will use JDBC authentication using a Java configuration where you can customize the default queries. Listing 18-10 shows how to plug in JDBC authentication. You need to configure it by providing a DataSource. Since you are using custom tables, you are also required to provide the select queries to get the user details and its roles. You set up two queries for AuthenticationManagerBuilder, one for authentication in usersByUsernameQuery and the other for authorization in authoritiesByUserNameQuery.
+
+• users-by-username-query: This query will select the username, password, and enabled properties of the user, and will take username as parameter according to your custom tables. In the actual implementation, the search may possibly be case sensitive or case insensitive depending on how the implementation instance is configured.
+• authorities-by-username-query: This query will select username and the role of the user and accept username as parameter according to your custom tables.
+
+Once authentication is taken care of, you can start configuring the authorization server responsible for managing the access tokens. Spring Security OAuth2 handles the authorization. To configure and enable the OAuth 2.0 authorization server you have to use the @EnableAuthorizationServer annotation in Listing 18-11.
+
+Listing 18-11. Spring OAuth Security Configuration (ch18\ch18-01\Ax2-EcomWith-Security\Ecom-security\src\main\java\com\acme\ecom\security\oauth\OAuth2Configuration.java)
+@Configuration
+@EnableAuthorizationServer
+public class OAuth2Configuration extends AuthorizationServerConfigurerAdapter {
+  @Autowired
+  @Qualifier("authenticationManagerBean")
+  private AuthenticationManager authenticationManager;
+
+  @Override
+  public void configure(ClientDetailsServiceConfigurer clients) throws Exception {
+    clients.inMemory()
+          .withClient("ecom_app")
+          .secret("ecom")
+          .scopes("PRODUCT","CUSTOMER","ORDER_HISTO", "CORE","SHIPPING","DELIVERY")
+          .autoApprove(true)
+          .authorities("PRODUCT_READ", "PRODUCT_WRITE","CUSTOMER_READ", "ORDER_READ","ORDER_WRITE")
+          .authorizedGrantTypes("implicit","refresh_token", "password", "authorization_code");
+  }
+
+  @Override
+  public void configure(AuthorizationServerEndpointsConfigurer endpoints) throws Exception {
+    endpoints.tokenStore(tokenStore()).tokenEnhancer(jwtTokenEnhancer()).authenticationManager(authenticationManager);
+  }
+  
+  @Bean
+  public TokenStore tokenStore() {
+    return new JwtTokenStore(jwtTokenEnhancer());
+  }
+
+  @Bean
+  protected JwtAccessTokenConverter jwtTokenEnhancer() {
+    KeyStoreKeyFactory keyStoreKeyFactory = new KeyStoreKeyFactory(new ClassPathResource("jwt.jks"), "mySecretKey".toCharArray());
+    JwtAccessTokenConverter converter = new JwtAccessTokenConverter();
+    converter.setKeyPair(keyStoreKeyFactory.getKeyPair("jwt"));
+    return converter;
+  }
+}
+
+You configure the OAuth 2.0 authorization server by adding the @EnableAuthorizationServer annotation and implementing AuthorizationServerConfigurer by using Spring’s AuthorizationServerConfigurerAdapter implementation. You override the empty configure() methods.
+
+AuthorizationServerConfigurerAdapter relies on few methods that can be overridden to set up the configuration. The main methods are
+
+• void configure(AuthorizationServerSecurityConfigurer security): You can configure the security of the authorization server, which means in practical terms the /oauth/token endpoint. The token endpoint (/oauth/token) will be automatically secured using HTTP basic authentication on the client’s credentials. The /oauth/authorize endpoint also needs to be secure, but that is a normal user-facing endpoint and should be secured the same way as the rest of your UI. In your case, you leave it as it is.
+• void configure(ClientDetailsServiceConfigurer clients): This will configure the ClientDetailsService (the service that provides the details about an OAuth2 client), like declaring  individual clients and their properties. Note that password grant is not enabled (even if some clients are allowed it) unless an AuthenticationManager is supplied to the configure method. At least one client or a fully formed custom ClientDetailsService must be declared or the server will not start. You registered another client and authorized the “implicit,” “password,” “authorization_code,” and “refresh_token” grant types. In order to use the “password” grant type, you need to wire in and use the AuthenticationManager bean. The authentication manager will represent the web-security users.
+• void configure(AuthorizationServerEndpointsConfigurer endpoints): You can configure the non-security features of the authorization server endpoints, like token store, token customizations, user approvals, and grant types here. You shouldn’t need to do anything by default, unless you need password grants, in which case you need to provide an authentication manager.
+
+By default, Spring Security will provide access_token and refresh_token in UUID format which will then get verified by the resource servers. In cases where you have a huge amount of requests for your services, this may turn the authorization server into a bottleneck. Instead, and as per the earlier discussion on tokens and JWT, you make your authorization server issue signed JWTs that contain all the information necessary to validate the user in the token itself. To achieve this, you need JwtTokenStore and JwtAccessTokenConverter. You use a custom JwtAccessTokenConverter that will use a pregenerated certificate for your JWT signatures. To do this, you must use your keyPair configuration and configure a custom JwtAccessTokenConverter, as seen in Listing 18-11. 
+JwtAccessTokenConverter translates between JWT-encoded token values and OAuth authentication information (bidirectional). It also acts as a TokenEnhancer (a Strategy class for enhancing an access token before it is stored by an AuthorizationServerTokenServices implementation) when tokens are granted. A TokenStore represents the storage mechanism to store the OAuth access token. Spring supports different kind of token store like InMemoryTokenStore, JDBCTokenStore, JwtTokenStore, and so on. You use JwtTokenStore for your case. The JWT version of the store (JwtTokenStore) encodes all the data about the grant into the token itself and it doesn’t persist any data. Once you have created the JwtTokenStore and JwtAccessTokenConverter beans, you wire them up to the AuthorizationServerEndpointsConfigurer in the OAuth2Configuration class.
+
+Resource Server
+Next, you can enable annotation-based security for your resource servers using the @EnableGlobalMethodSecurity annotation on any @Configuration instance. This enables Spring method-level security. See Listing 18-12.
+
+Listing 18-12. EnableGlobalMethodSecurity (ch18\ch18-01\Ax2-EcomWith-Security\Ecom-core\src\main\java\com\acme\ecom\core\security\GlobalMethodSecurityConfiguration.java)
+@Configuration
+@EnableGlobalMethodSecurity(prePostEnabled = true)
+public class GlobalMethodSecurityConfiguration
+{
+}
+@EnableGlobalMethodSecurity can take several arguments:
+
+• prePostEnabled: Determines whether Spring Security’s pre and post annotations (@PreAuthorize,@PostAuthorize,..) should be enabled.
+• secureEnabled: Determines if Spring Security’s secured annotation (@Secured) should be enabled.
+• jsr250Enabled: Determines if JSR-250 annotations (@RolesAllowed, ...) should be enabled.
+
+You should enable only one type of annotation in the same application for any interface or class; otherwise, the behavior will not be well-defined. If two annotations are found that apply to a particular method, only one of them will be applied.
+You use prePostEnabled = true and Spring’s @PreAuthorize/@PostAuthorize annotations are preferred way for applying method-level security. They support the Spring Expression Language and provide expression-based access control. Let’s look at how they are leveraged here:
+
+• @PreAuthorize: This is suitable for validating authorization before entry into a method. @PreAuthorize can take into account the roles/permissions of a logged-in user, the argument passed to the method,etc.
+• @PostAuthorize: This can check for authorization after the method has been executed. It is suitable for verifying authorization on returned values; however, it’s not commonly used. Spring EL provides a returnObject that can be accessed in the expression language, which reflects the actual object returned from the method.
+
+Next, you need to configure the resource server. EnableResourceServer is a convenient annotation for OAuth2 resource servers, and it enables a Spring Security filter that authenticates requests via an incoming OAuth2 token. This enables a Spring Security filter named OAuth2AuthenticationProcessingFilter that authenticates requests using a passed-in OAuth2 token. You should add this annotation and provide a @Bean of type ResourceServerConfigurer (e.g. via ResourceServerConfigurerAdapter) that specifies the details of the resource (URL paths and resource ID). You create a bean named CoreResourceServerConfiguration that extends ResourceServerConfigurerAdapter and overrides the configure(HttpSecurity http) method to enable the security of the Ecom-core microservice. See Listing 18-13.
+
+Listing 18-13. Enabling Resource Server (ch18\ch18-01\Ax2-Ecom-WithSecurity\Ecom-core\src\main\java\com\acme\ecom\core\security\CoreResourceServerConfiguration.java)
+@Configuration
+@EnableResourceServer
+public class CoreResourceServerConfiguration extends ResourceServerConfigurerAdapter{
+  @Autowired
+  TokenStore tokenStore;
+  
+  @Autowired
+  JwtAccessTokenConverter tokenConverter;
+
+  @Override
+  public void configure(HttpSecurity http) throws Exception {
+    http
+      .csrf().disable()
+      .authorizeRequests()
+      .anyRequest().authenticated()
+      .antMatchers(HttpMethod.POST).hasAuthority("ORDER_WRITE")
+      .antMatchers(HttpMethod.DELETE).hasAuthority("ORDER_WRITE");
+  }
+
+  @Override
+  public void configure(ResourceServerSecurityConfigurer resources) throws Exception {
+    resources.resourceId("CORE").tokenStore(tokenStore);
+  }
+}
+
+In the configure method you use the passed-in HttpSecurity instance to secure the POST and DELETE methods and only allow authenticated users with ORDER_WRITE authority to access the resources. Then you use the ResourceServerSecurityConfigurer class to create a resource id with the name CORE. The name of this resource id must match the name used in the authorization server.
+Next, you need to read values from the encrypted JWT. As you have already seen, the JwtAccessTokenConverter helps to translate between JWT-encoded token values and OAuth authentication information in a bidirectional manner. Since you use asymmetric encryption and since the token has already been encrypted with the private key by the authorization server, you will now use the public key pair to decrypt and read. See Listing 18-14.
+
+Listing 18-14. Token Decryption (ch18\ch18-01\Ax2-Ecom-With-Security\Ecomcore\src\main\java\com\acme\ecom\core\security\JwtConfiguration.java)
+@Configuration
+public class JwtConfiguration {
+  @Autowired
+  JwtAccessTokenConverter jwtAccessTokenConverter;
+
+  @Bean
+  @Qualifier("tokenStore")
+  public TokenStore tokenStore() {
+    return new JwtTokenStore(jwtAccessTokenConverter);
+  }
+
+  @Bean
+  protected JwtAccessTokenConverter jwtTokenEnhancer() {
+    JwtAccessTokenConverter converter = new JwtAccessTokenConverter();
+    Resource resource = new ClassPathResource("public.cert");
+    String publicKey = null;
+    try {
+      publicKey = new String(FileCopyUtils.copyToByteArray(resource.getInputStream()));
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+    converter.setVerifierKey(publicKey);
+    return converter;
+  }
+}
+
+That completes the resource server setup.
+
+Note The certificates and keystores are included with the code example downloads. The creation of them is not covered here, since it can be done following any standard literature on the subject. Further, the code for other resource servers (microservices) of the example application is not explained, since it follows a setup similar to that of the Ecom-core microservice, which you saw here.
+
+Set Up the E-Commerce Microservice Application
+In this section, you will configure, build, and run the e-commerce microservice application and execute various test cases.
+
+Configure the Application
+You need to make the required configuration changes in the microservices. The changes you need to make are similar to what was explained in Chapter 17.
+
+Set Up the Environment Infrastructure
+Next, you need to set up a few infrastructure settings to run the example. This again is similar to what was explained in Chapter 17.
+
+Build and Run the Application
+There are 12 microservices in the application. The methodology to build and run the application again is similar to what was explained in Chapter 17.
+In Chapter 17, you were required to bring up the servers in the below sequence for the first three microservices:
+
+Ecom-config
+Ecom-registry
+Ecom-gateway
+
+I advise you to then start the following two microservices:
+
+Ecom-security
+Ecom-user
+
+For the rest of the microservices, you may start them in any order.
+
+Test the Application
+You can test the application, preferably in the Chrome browser. Here again, you may refer to the steps described in Chapter 17 to test the complete application end to end.
+
+Summary
+You just explored OAuth 2.0 in general and looked into specific aspects of selected grand types relevant to the microservices context. You also plugged in authentication and authorization into the microservices e-commerce application. This is a major step forward since security is a prime concern in any enterprise-grade application. What is left from the discussions through the previous chapters is a deep dive into the necessity of keeping the order and inventory domains close and together, and you will do so in the next chapter.
